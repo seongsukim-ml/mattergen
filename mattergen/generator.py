@@ -1,10 +1,10 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 import io
-import json
 import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
 from zipfile import ZipFile
 
 import ase.io
@@ -29,7 +29,7 @@ from mattergen.common.utils.eval_utils import (
     make_structure,
     save_structures,
 )
-from mattergen.common.utils.globals import DEFAULT_SAMPLING_CONFIG_PATH
+from mattergen.common.utils.globals import DEFAULT_SAMPLING_CONFIG_PATH, get_device
 from mattergen.diffusion.lightning_module import DiffusionLightningModule
 from mattergen.diffusion.sampling.pc_sampler import PredictorCorrector
 
@@ -206,6 +206,24 @@ class CrystalGenerator:
             f"but got {self.num_atoms_distribution}. To add your own distribution, "
             "please add it to mattergen.common.data.num_atoms_distribution.NUM_ATOMS_DISTRIBUTIONS."
         )
+        if self.target_compositions_dict:
+            assert self.cfg.lightning_module.diffusion_module.loss_fn.weights.get(
+                "atomic_numbers", 0.0
+            ) == 0.0 and "atomic_numbers" not in self.cfg.lightning_module.diffusion_module.corruption.get(
+                "discrete_corruptions", {}
+            ), "Input model appears to have been trained for crystal generation (i.e., with atom type denoising), not crystal structure prediction. Please use a model trained for crystal structure prediction instead."
+            sampling_cfg = self._load_sampling_config(
+                sampling_config_name=self.sampling_config_name,
+                sampling_config_overrides=self.sampling_config_overrides,
+                sampling_config_path=self.sampling_config_path,
+            )
+            if (
+                "atomic_numbers" in sampling_cfg.sampler_partial.predictor_partials
+                or "atomic_numbers" in sampling_cfg.sampler_partial.corrector_partials
+            ):
+                raise ValueError(
+                    "Incompatible sampling config for crystal structure prediction: found atomic_numbers in predictor_partials or corrector_partials. Use the 'csp' sampling config instead, e.g., via --sampling-config-name=csp."
+                )
 
     @property
     def model(self) -> DiffusionLightningModule:
@@ -247,7 +265,7 @@ class CrystalGenerator:
         target_compositions_dict: list[dict[str, float]] | None = None,
     ) -> ConditionLoader:
         condition_loader_partial = instantiate(sampling_config.condition_loader_partial)
-        if target_compositions_dict is None:
+        if not target_compositions_dict:
             return condition_loader_partial(properties=self.properties_to_condition_on)
 
         return condition_loader_partial(target_compositions_dict=target_compositions_dict)
@@ -323,7 +341,7 @@ class CrystalGenerator:
         if self._model is not None:
             return
         model = load_model_diffusion(self.checkpoint_info)
-        model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(get_device())
         self._model = model
         self._cfg = self.checkpoint_info.config
 
@@ -353,7 +371,6 @@ class CrystalGenerator:
 
         print("\nSampling config:")
         print(OmegaConf.to_yaml(sampling_config, resolve=True))
-
         condition_loader = self.get_condition_loader(sampling_config, target_compositions_dict)
 
         sampler_partial = instantiate(sampling_config.sampler_partial)

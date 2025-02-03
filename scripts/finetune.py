@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 import json
 import logging
 from collections import OrderedDict
@@ -13,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from pytorch_lightning.cli import SaveConfigCallback
 
 from mattergen.common.utils.data_classes import MatterGenCheckpointInfo
-from mattergen.common.utils.globals import MODELS_PROJECT_ROOT
+from mattergen.common.utils.globals import MODELS_PROJECT_ROOT, get_device
 from mattergen.diffusion.run import AddConfigCallback, SimpleParser, maybe_instantiate
 
 logger = logging.getLogger(__name__)
@@ -22,15 +25,24 @@ logger = logging.getLogger(__name__)
 def init_adapter_lightningmodule_from_pretrained(
     adapter_cfg: DictConfig, lightning_module_cfg: DictConfig
 ) -> Tuple[pl.LightningModule, DictConfig]:
-    assert adapter_cfg.model_path is not None, "model_path must be provided."
 
-    model_path = Path(hydra.utils.to_absolute_path(adapter_cfg.model_path))
-    ckpt_info = MatterGenCheckpointInfo(model_path, adapter_cfg.load_epoch)
+    if adapter_cfg.model_path is not None:
+        if adapter_cfg.pretrained_name is not None:
+            logger.warning(
+                "pretrained_name is provided, but will be ignored since model_path is also provided."
+            )
+        model_path = Path(hydra.utils.to_absolute_path(adapter_cfg.model_path))
+        ckpt_info = MatterGenCheckpointInfo(model_path, adapter_cfg.load_epoch)
+    elif adapter_cfg.pretrained_name is not None:
+        assert (
+            adapter_cfg.model_path is None
+        ), "model_path must be None when pretrained_name is provided."
+        ckpt_info = MatterGenCheckpointInfo.from_hf_hub(adapter_cfg.pretrained_name)
 
     ckpt_path = ckpt_info.checkpoint_path
 
-    version_root_path = Path(ckpt_path).relative_to(model_path).parents[1]
-    config_path = model_path / version_root_path
+    version_root_path = Path(ckpt_path).relative_to(ckpt_info.model_path).parents[1]
+    config_path = ckpt_info.model_path / version_root_path
 
     # load pretrained model config.
     if (config_path / "config.yaml").exists():
@@ -78,7 +90,7 @@ def init_adapter_lightningmodule_from_pretrained(
 
     lightning_module = hydra.utils.instantiate(lightning_module_cfg)
 
-    ckpt: dict = torch.load(ckpt_path)
+    ckpt: dict = torch.load(ckpt_path, map_location=get_device())
     pretrained_dict: OrderedDict = ckpt["state_dict"]
     scratch_dict: OrderedDict = lightning_module.state_dict()
     scratch_dict.update(

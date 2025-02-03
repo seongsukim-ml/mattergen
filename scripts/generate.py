@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 import os
 from pathlib import Path
 from typing import Literal
@@ -5,7 +8,10 @@ from typing import Literal
 import fire
 
 from mattergen.common.data.types import TargetProperty
-from mattergen.common.utils.eval_utils import MatterGenCheckpointInfo
+from mattergen.common.utils.data_classes import (
+    PRETRAINED_MODEL_NAME,
+    MatterGenCheckpointInfo,
+)
 from mattergen.generator import CrystalGenerator
 
 import pandas as pd
@@ -23,7 +29,8 @@ torch.set_num_threads(16)
 
 def main(
     output_path: str,
-    model_path: str,
+    pretrained_name: PRETRAINED_MODEL_NAME | None = None,
+    model_path: str | None = None,
     batch_size: int = 64,
     num_batches: int = 1,
     config_overrides: list[str] | None = None,
@@ -35,6 +42,7 @@ def main(
     record_trajectories: bool = True,
     diffusion_guidance_factor: float | None = None,
     strict_checkpoint_loading: bool = True,
+    target_compositions: list[dict[str, int]] | None = None,
 ):
     """
     Evaluate diffusion model against molecular metrics.
@@ -50,9 +58,17 @@ def main(
         load_epoch: Epoch to load from the checkpoint. If None, the best epoch is loaded. (default: None)
         record: Whether to record the trajectories of the generated structures. (default: True)
         strict_checkpoint_loading: Whether to raise an exception when not all parameters from the checkpoint can be matched to the model.
+        target_compositions: List of dictionaries with target compositions to condition on. Each dictionary should have the form `{element: number_of_atoms}`. If None, the target compositions are not conditioned on.
+           Only supported for models trained for crystal structure prediction (CSP) (default: None)
 
     NOTE: When specifying dictionary values via the CLI, make sure there is no whitespace between the key and value, e.g., `--properties_to_condition_on={key1:value1}`.
     """
+    assert (
+        pretrained_name is not None or model_path is not None
+    ), "Either pretrained_name or model_path must be provided."
+    assert (
+        pretrained_name is None or model_path is None
+    ), "Only one of pretrained_name or model_path can be provided."
 
     if not os.path.exists(output_path):
         os.makedirs(output_path)
@@ -60,13 +76,19 @@ def main(
     sampling_config_overrides = sampling_config_overrides or []
     config_overrides = config_overrides or []
     properties_to_condition_on = properties_to_condition_on or {}
+    target_compositions = target_compositions or []
 
-    checkpoint_info = MatterGenCheckpointInfo(
-        model_path=Path(model_path).resolve(),
-        load_epoch=checkpoint_epoch,
-        config_overrides=config_overrides,
-        strict_checkpoint_loading=strict_checkpoint_loading,
-    )
+    if pretrained_name is not None:
+        checkpoint_info = MatterGenCheckpointInfo.from_hf_hub(
+            pretrained_name, config_overrides=config_overrides
+        )
+    else:
+        checkpoint_info = MatterGenCheckpointInfo(
+            model_path=Path(model_path).resolve(),
+            load_epoch=checkpoint_epoch,
+            config_overrides=config_overrides,
+            strict_checkpoint_loading=strict_checkpoint_loading,
+        )
     _sampling_config_path = Path(sampling_config_path) if sampling_config_path is not None else None
     generator = CrystalGenerator(
         checkpoint_info=checkpoint_info,
@@ -80,6 +102,7 @@ def main(
         diffusion_guidance_factor=(
             diffusion_guidance_factor if diffusion_guidance_factor is not None else 0.0
         ),
+        target_compositions_dict=target_compositions,
     )
     generator.generate(output_dir=Path(output_path))
     cif_eval(output_path)
@@ -149,6 +172,10 @@ def cif_eval(file_path):
     save_res(0.01)
 
 
-if __name__ == "__main__":
+def _main():
     # use fire instead of argparse to allow for the specification of dictionary values via the CLI
     fire.Fire(main)
+
+
+if __name__ == "__main__":
+    _main()

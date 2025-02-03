@@ -1,11 +1,9 @@
 """
+Copyright (c) Facebook, Inc. and its affiliates.
+Copyright (c) Microsoft Corporation.
+Licensed under the MIT License.
 Code derived from the OCP codebase:
 https://github.com/Open-Catalyst-Project/ocp
-
-Copyright (c) Facebook, Inc. and its affiliates.
-
-This source code is licensed under the MIT license found in
-https://github.com/Open-Catalyst-Project/ocp/blob/main/LICENSE.md.
 """
 
 import sys
@@ -13,6 +11,8 @@ import sys
 import numpy as np
 import torch
 from torch_scatter import segment_coo, segment_csr
+
+from mattergen.common.utils.globals import get_pyg_device
 
 
 def get_pbc_distances(
@@ -274,14 +274,21 @@ def get_max_neighbors_mask(
     # Get number of neighbors
     # segment_coo assumes sorted index
     ones = index.new_ones(1).expand_as(index)
-    num_neighbors = segment_coo(ones, index, dim_size=num_atoms)
+    # required because PyG does not support MPS for the segment_coo operation yet.
+    pyg_device = get_pyg_device()
+    device_before = ones.device
+    num_neighbors = segment_coo(ones.to(pyg_device), index.to(pyg_device), dim_size=num_atoms).to(
+        device_before
+    )
     max_num_neighbors = num_neighbors.max()
     num_neighbors_thresholded = num_neighbors.clamp(max=max_num_neighbors_threshold)
 
     # Get number of (thresholded) neighbors per image
     image_indptr = torch.zeros(natoms.shape[0] + 1, device=device, dtype=torch.long)
     image_indptr[1:] = torch.cumsum(natoms, dim=0)
-    num_neighbors_image = segment_csr(num_neighbors_thresholded, image_indptr)
+    num_neighbors_image = segment_csr(
+        num_neighbors_thresholded.to(pyg_device), image_indptr.to(pyg_device)
+    ).to(device_before)
 
     # If max_num_neighbors is below the threshold, return early
     if max_num_neighbors <= max_num_neighbors_threshold or max_num_neighbors_threshold <= 0:
