@@ -10,6 +10,8 @@ from mattergen.evaluation.utils.relaxation import relax_structures
 from mattergen.evaluation.utils.structure_matcher import (
     DefaultDisorderedStructureMatcher,
     DefaultOrderedStructureMatcher,
+    OrderedStructureMatcher,
+    DisorderedStructureMatcher,
 )
 
 
