@@ -25,6 +25,7 @@ def main(
     device: str = "cuda",
 ):
     structures = load_structures(Path(structures_path))
+    # structures = load_structures(Path(structures_path) / "generated_crystals.extxyz")
     energies = np.load(energies_path) if energies_path else None
     structure_matcher = (
         DefaultDisorderedStructureMatcher()

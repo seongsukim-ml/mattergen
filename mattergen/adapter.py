@@ -50,7 +50,16 @@ class GemNetTAdapter(GemNetTDenoiser):
         """
         augment <z_per_crystal> with <self.condition_embs_adapt>.
         """
-        (frac_coords, lattice, atom_types, num_atoms, batch,) = (
+        import pdb
+
+        pdb.set_trace
+        (
+            frac_coords,
+            lattice,
+            atom_types,
+            num_atoms,
+            batch,
+        ) = (
             x["pos"],
             x["cell"],
             x["atomic_numbers"],

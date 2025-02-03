@@ -31,7 +31,11 @@ from mattergen.common.utils.eval_utils import (
 )
 from mattergen.common.utils.globals import DEFAULT_SAMPLING_CONFIG_PATH
 from mattergen.diffusion.lightning_module import DiffusionLightningModule
-from mattergen.diffusion.sampling.pc_sampler import PredictorCorrector
+from mattergen.self_guidance.symmetry_utils import *
+
+# from mattergen.diffusion.sampling.pc_sampler import PredictorCorrector
+from mattergen.self_guidance.wyckoff_pc_sampler import PredictorCorrector
+import json
 
 
 def draw_samples_from_sampler(
@@ -41,6 +45,7 @@ def draw_samples_from_sampler(
     output_path: Path | None = None,
     cfg: DictConfig | None = None,
     record_trajectories: bool = True,
+    project_to_space_group: bool = False,
 ) -> list[Structure]:
 
     # Dict
@@ -51,14 +56,24 @@ def draw_samples_from_sampler(
 
     all_samples_list = []
     all_trajs_list = []
+    all_projected_list = []
+    all_projected_orig_list = []
+
     for conditioning_data, mask in tqdm(condition_loader, desc="Generating samples"):
         # generate samples
         if record_trajectories:
-            sample, mean, intermediate_samples = sampler.sample_with_record(conditioning_data, mask)
+            sample, mean, intermediate_samples, projected_mean, projected_orig = (
+                sampler.sample_with_record(conditioning_data, mask)
+            )
             all_trajs_list.extend(list_of_time_steps_to_list_of_trajectories(intermediate_samples))
+            projected = projected_mean
         else:
             sample, mean = sampler.sample(conditioning_data, mask)
         all_samples_list.extend(mean.to_data_list())
+        all_projected_orig_list.extend(projected_orig.to_data_list())
+        if project_to_space_group:
+            # projected = _project_to_space_group(sample)
+            all_projected_list.extend(projected.to_data_list())
     all_samples = collate(all_samples_list)
     assert isinstance(all_samples, ChemGraph)
     lengths, angles = lattice_matrix_to_params_torch(all_samples.cell)
@@ -72,19 +87,175 @@ def draw_samples_from_sampler(
         all_samples["num_atoms"].reshape(-1),
     )
 
+    if project_to_space_group:
+        all_projected = collate(all_projected_list)
+        assert isinstance(all_projected, ChemGraph)
+        lengths1, angles1 = lattice_matrix_to_params_torch(all_projected.cell)
+        all_projected = all_projected.replace(lengths=lengths1, angles=angles1)
+
+        projected_strucs = structure_from_model_output(
+            all_projected["pos"].reshape(-1, 3),
+            all_projected["atomic_numbers"].reshape(-1),
+            all_projected["lengths"].reshape(-1, 3),
+            all_projected["angles"].reshape(-1, 3),
+            all_projected["num_atoms"].reshape(-1),
+        )
+
+        all_projected_orig = collate(all_projected_orig_list)
+        assert isinstance(all_projected_orig, ChemGraph)
+        lengths2, angles2 = lattice_matrix_to_params_torch(all_projected_orig.cell)
+        all_projected_orig = all_projected_orig.replace(lengths=lengths2, angles=angles2)
+
+        projected_orig_strucs = structure_from_model_output(
+            all_projected_orig["pos"].reshape(-1, 3),
+            all_projected_orig["atomic_numbers"].reshape(-1),
+            all_projected_orig["lengths"].reshape(-1, 3),
+            all_projected_orig["angles"].reshape(-1, 3),
+            all_projected_orig["num_atoms"].reshape(-1),
+        )
+
     if output_path is not None:
         assert cfg is not None
         # Save structures to disk in both a extxyz file and a compressed zip file.
         # do this before uploading to mongo in case there is an authentication error
         save_structures(output_path, generated_strucs)
 
+        if project_to_space_group:
+            os.makedirs(output_path / "projected", exist_ok=True)
+            save_structures(output_path / "projected", projected_strucs)
+            os.makedirs(output_path / "orig_projected", exist_ok=True)
+            save_structures(output_path / "orig_projected", projected_orig_strucs)
+
         if record_trajectories:
             dump_trajectories(
                 output_path=output_path,
                 all_trajs_list=all_trajs_list,
             )
+        # save structure ids
+        with open(output_path / "structure_ids.json", "w") as f:
+            json.dump(condition_loader.dataset.structure_id, f)
 
     return generated_strucs
+
+
+def _project_to_space_group(batch):
+    cf = CrystalFamily()
+    cf.set_device(batch.pos.device)
+    lat_perm, perm_for_A1, perm_for_A2 = get_latttice_permutations(device=batch.pos.device)
+
+    wyckoff_batch = batch.wyckoff_bat.clone()
+    idx, cum = 0, 0
+    for len, num_atom in zip(batch.wyckoff_bat_len, batch.num_atoms):
+        wyckoff_batch[idx : idx + len] = wyckoff_batch[idx : idx + len] + cum
+        idx += len
+        cum += num_atom
+
+    anchors = batch.anchors.clone().detach()
+    idx = 0
+    cum = 0
+    for len, num_atom in zip(batch.anchors_len, batch.num_atoms):
+        anchors[idx : idx + len] = anchors[idx : idx + len] + cum
+        idx += len
+        cum += num_atom
+
+    # project latice
+    conv_lat = torch.bmm(batch.prim_to_conv, batch.cell)
+    conv_lat_vec = cf.m2v(cf.de_so3(conv_lat))
+    conv_lat_vec_proj = cf.proj_k_to_spacegroup(conv_lat_vec, batch.space_groups)
+    conv_lat_proj = cf.v2m(conv_lat_vec_proj)
+
+    rank = torch.argsort(-torch.norm(conv_lat_proj, dim=-1), dim=-1)
+    idx = torch.cat([batch.space_groups.unsqueeze(-1), rank], dim=-1)
+    perm = lat_perm[idx[:, 0], idx[:, 1], idx[:, 2], idx[:, 3]]
+    perm_A = perm_for_A2[batch.space_groups]
+
+    perm_conv_lat_proj = torch.bmm(torch.bmm(perm, conv_lat_proj), perm.transpose(-1, -2))
+    perm_conv_lat_proj = torch.bmm(torch.bmm(perm_A, perm_conv_lat_proj), perm_A.transpose(-1, -2))
+
+    prim_lat_proj = torch.bmm(batch.conv_to_prim, perm_conv_lat_proj)
+
+    pos_cart = torch.einsum("bi,bij->bj", batch.pos, batch.cell[batch.batch])
+    pos_frac_conv = torch.einsum(
+        "bi,bij->bj", pos_cart, torch.inverse(perm_conv_lat_proj)[batch.batch]
+    )
+    pos_tran = torch.cat(
+        [
+            pos_frac_conv[wyckoff_batch],
+            torch.ones(pos_frac_conv[wyckoff_batch].shape[0], 1, device=batch.pos.device),
+        ],
+        dim=1,
+    )
+
+    pos_frac_proj = torch.einsum("bij,bj->bi", batch.wyckoff_ops, pos_tran).squeeze(-1)[:, :3] % 1.0
+    pos_frac_proj = torch.einsum("bij,bj->bi", perm[batch.batch[wyckoff_batch]], pos_frac_proj)
+    pos_cart_proj = torch.einsum(
+        "bi,bij->bj", pos_frac_proj, perm_conv_lat_proj[batch.batch[wyckoff_batch]]
+    )
+
+    prim_lat_inv = torch.inverse(prim_lat_proj)
+    pos_prim_frac_proj_all = (
+        torch.einsum("bi,bij->bj", pos_cart_proj, prim_lat_inv[batch.batch[wyckoff_batch]]) % 1.0
+    )
+
+    ## Get prim idx
+    for i in range(5):
+        random_pos_frac_conv = torch.rand_like(pos_frac_conv).to(pos_frac_conv.device)
+        random_pos_tran = torch.cat(
+            [
+                random_pos_frac_conv[wyckoff_batch],
+                torch.ones(
+                    random_pos_frac_conv[wyckoff_batch].shape[0],
+                    1,
+                    device=pos_frac_conv.device,
+                ),
+            ],
+            dim=1,
+        )
+        random_pos_frac_proj = (
+            torch.einsum("bij,bj->bi", batch.wyckoff_ops, random_pos_tran).squeeze(-1)[:, :3] % 1.0
+        ) % 1.0
+        random_pos_frac_proj = torch.einsum(
+            "bij,bj->bi", perm[batch.batch[wyckoff_batch]], random_pos_frac_proj
+        )
+        random_pos_cart_proj = torch.einsum(
+            "bi,bij->bj",
+            random_pos_frac_proj,
+            perm_conv_lat_proj[batch.batch[wyckoff_batch]],
+        )
+
+        random_fracs = torch.einsum(
+            "bi,bij->bj",
+            random_pos_cart_proj,
+            prim_lat_inv[batch.batch[wyckoff_batch]],
+        )
+        random_fracs = random_fracs % 1.0
+        random_fracs_diff = random_fracs.unsqueeze(1) - random_fracs.unsqueeze(0)
+        random_fracs_diff = random_fracs_diff - torch.round(random_fracs_diff)
+        EPSILON = 5e-4
+        random_fracs_diff_is_zero = torch.all(
+            torch.isclose(
+                random_fracs_diff,
+                torch.zeros_like(random_fracs_diff),
+                rtol=EPSILON,
+                atol=EPSILON,
+            ),
+            dim=-1,
+        )
+        random_fracs_idx = random_fracs_diff_is_zero & (
+            wyckoff_batch.unsqueeze(0) == wyckoff_batch.unsqueeze(1)
+        )
+        random_fracs_idx = ~(random_fracs_idx.triu(diagonal=1).any(dim=0))
+        # random_fracs_prim = random_fracs[random_fracs_idx]
+        assert random_fracs_idx.shape[0] == pos_prim_frac_proj_all.shape[0]
+        pos_prim_frac_proj = pos_prim_frac_proj_all[random_fracs_idx]
+        if pos_prim_frac_proj.shape[0] == batch.pos.shape[0]:
+            break
+
+    assert pos_prim_frac_proj.shape[0] == batch.pos.shape[0]
+
+    return batch.clone().replace(
+        pos=pos_prim_frac_proj, cell=prim_lat_proj, atomic_numbers=batch.atomic_numbers[anchors]
+    )
 
 
 def list_of_time_steps_to_list_of_trajectories(
@@ -333,6 +504,7 @@ class CrystalGenerator:
         num_batches: int | None = None,
         target_compositions_dict: list[dict[str, float]] | None = None,
         output_dir: str = "outputs",
+        project_to_space_group: bool = False,
     ) -> list[Structure]:
         # Prioritize the runtime provided batch_size, num_batches and target_compositions_dict
         batch_size = batch_size or self.batch_size
@@ -342,8 +514,8 @@ class CrystalGenerator:
         assert num_batches is not None
 
         # print config for debugging and reproducibility
-        print("\nModel config:")
-        print(OmegaConf.to_yaml(self.cfg, resolve=True))
+        # print("\nModel config:")
+        # print(OmegaConf.to_yaml(self.cfg, resolve=True))
 
         sampling_config = self.load_sampling_config(
             batch_size=batch_size,
@@ -351,8 +523,8 @@ class CrystalGenerator:
             target_compositions_dict=target_compositions_dict,
         )
 
-        print("\nSampling config:")
-        print(OmegaConf.to_yaml(sampling_config, resolve=True))
+        # print("\nSampling config:")
+        # print(OmegaConf.to_yaml(sampling_config, resolve=True))
 
         condition_loader = self.get_condition_loader(sampling_config, target_compositions_dict)
 
@@ -366,6 +538,7 @@ class CrystalGenerator:
             output_path=Path(output_dir),
             properties_to_condition_on=self.properties_to_condition_on,
             record_trajectories=self.record_trajectories,
+            project_to_space_group=project_to_space_group,
         )
 
         return generated_structures

@@ -94,6 +94,11 @@ dependencies = [
 "wandb>=0.10.33",
 ]
 
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+]
+
 [tool.setuptools.packages.find]
 include = ["mattergen*"]
 
@@ -111,5 +116,8 @@ torch_scatter = { url = "https://data.pyg.org/whl/torch-2.2.0%2Bcu118/torch_scat
 name = "pytorch"
 url = "https://download.pytorch.org/whl/cu118"
 explicit = true
+
+[tool.uv.workspace]
+members = ["matgen"]
 
 

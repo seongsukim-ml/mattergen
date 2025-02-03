@@ -6,7 +6,9 @@ import fire
 
 from mattergen.common.data.types import TargetProperty
 from mattergen.common.utils.eval_utils import MatterGenCheckpointInfo
-from mattergen.generator import CrystalGenerator
+
+# from mattergen.generator import CrystalGenerator
+from mattergen.self_guidance.wyckoff_generator import CrystalGenerator
 
 import pandas as pd
 from pymatgen.io.cif import CifParser
@@ -35,6 +37,8 @@ def main(
     record_trajectories: bool = True,
     diffusion_guidance_factor: float | None = None,
     strict_checkpoint_loading: bool = True,
+    use_wyckoff: bool = True,
+    project_save: bool = False,
 ):
     """
     Evaluate diffusion model against molecular metrics.
@@ -53,9 +57,21 @@ def main(
 
     NOTE: When specifying dictionary values via the CLI, make sure there is no whitespace between the key and value, e.g., `--properties_to_condition_on={key1:value1}`.
     """
+    output_path = Path(output_path).resolve()
 
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
+    def make_dir(output_path):
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+
+    make_dir(output_path)
+    sub_dir_name = "result_0"
+    if os.path.exists(output_path / sub_dir_name):
+        len_result = len([name for name in os.listdir(output_path) if name.startswith("result")])
+        sub_dir_name = f"result_{len_result}"
+    output_path = output_path / sub_dir_name
+    make_dir(output_path)
+
+    print("OUTPUT_DIR:", output_path, "\n")
 
     sampling_config_overrides = sampling_config_overrides or []
     config_overrides = config_overrides or []
@@ -80,25 +96,49 @@ def main(
         diffusion_guidance_factor=(
             diffusion_guidance_factor if diffusion_guidance_factor is not None else 0.0
         ),
+        use_wyckoff=use_wyckoff,
     )
-    generator.generate(output_dir=Path(output_path))
-    cif_eval(output_path)
+    generator.generate(output_dir=Path(output_path), project_to_space_group=project_save)
 
-    print("[I] output dir:", output_path)
+    # spg = int(output_path.split("/")[-2].split("_")[0].replace("spg", ""))
+    spg = int(output_path.parts[-2].split("_")[0].replace("spg", ""))
+    print(f"[INFO] Generate CIF files for spg{spg}")
+    cif_eval(output_path, spg)
+    if project_save:
+        if os.path.exists(output_path / "projected"):
+            print(f"[INFO] Generate CIF files for spg{spg} with projected")
+            cif_eval(output_path / "projected", spg)
+        if os.path.exists(output_path / "orig_projected"):
+            print(f"[INFO] Generate CIF files for spg{spg} with orig_projected")
+            cif_eval(output_path / "orig_projected", spg)
+
+    print("OUTPUT_DIR:", output_path, "\n")
 
 
-def cif_eval(file_path):
-    spg = file_path.split("/")[-1].split("_")[0].replace("spg", "")
-    spg = int(spg)
-
-    if not os.path.exists(file_path + "/generated_crystals_cif.zip"):
+def cif_eval(file_path, spg=None):
+    if spg is None:
+        # spg = file_path.split("/")[-2].split("_")[0].replace("spg", "")
+        spg = file_path.parts[-2].split("_")[0].replace("spg", "")
+        spg = int(spg)
+    dir_name = "generated_crystals_cif"
+    if not os.path.exists(file_path / "generated_crystals_cif.zip"):
         print("No zip file found")
-    elif os.path.exists(file_path + "/generated_crystals_cif"):
+        return
+
+    if os.path.exists(file_path / "generated_crystals_cif"):
         print("Directory already exists")
-    else:
-        zipfile.ZipFile(file_path + "/generated_crystals_cif.zip", "r").extractall(file_path)
-        os.rename(file_path + "/tmp", file_path + "/generated_crystals_cif")
-    cif_path = file_path + "/generated_crystals_cif"
+        # cif_dirs = os.listdir(file_path).glob("generated_crystals_cif")
+        cif_dirs = [
+            os.path.join(file_path, d)
+            for d in os.listdir(file_path)
+            if d.startswith("generated_crystals_cif")
+        ]
+        cif_dirs = [d for d in cif_dirs if os.path.isdir(d)]
+        dir_name = f"generated_crystals_cif_{len(cif_dirs)}"
+
+    cif_path = file_path / dir_name
+    zipfile.ZipFile(file_path / "generated_crystals_cif.zip", "r").extractall(file_path)
+    os.rename(file_path / "tmp", cif_path)
     print(cif_path)
 
     # get list of cifs from directory
@@ -132,9 +172,7 @@ def cif_eval(file_path):
             res[spg] = 0
 
         # write the number of spg
-        with open(
-            file_path + f"/symprec_{tol}_spg{spg}_{res[spg]}_{len(structures)}.txt", "w"
-        ) as f:
+        with open(file_path / f"symprec_{tol}_spg{spg}_{res[spg]}_{len(structures)}.txt", "w") as f:
             for k in sorted(res.keys()):
                 f.write(f"{k:3} {res[k]}  {res[k]/len(structures):.2f}\n")
             f.write("\n")
@@ -145,8 +183,16 @@ def cif_eval(file_path):
         print("[I] Save done")
         print("")
 
-    save_res(0.1)
-    save_res(0.01)
+    try:
+        save_res(0.01)
+    except Exception as e:
+        print(e)
+        print("Failed to save with symprec=0.01")
+    try:
+        save_res(0.1)
+    except Exception as e:
+        print(e)
+        print("Failed to save with symprec=0.1")
 
 
 if __name__ == "__main__":

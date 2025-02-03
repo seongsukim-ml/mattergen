@@ -10,6 +10,13 @@
 *.userosscache
 *.sln.docstates
 
+results/
+_my_scripts/conventional
+_my_scripts/space_group_info
+.vscode
+datasets
+outputs
+mattergen.egg-info
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
