@@ -1,6 +1,6 @@
-spg=6
-CVD=4
-vs="prim_new2"
+spg=216
+CVD=7
+vs="prim_v2"
 gs=1
 ge=0.5
 ts=0.95

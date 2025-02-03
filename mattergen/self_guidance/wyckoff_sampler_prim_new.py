@@ -72,6 +72,8 @@ class GuidedPredictorCorrector(PredictorCorrector):
         guidance_start: float | None = None,
         guidance_end: float | None = None,
         use_cond_model: False,
+        ts: float = 1.0,
+        te: float = 0.0,
         **kwargs,
     ):
         """
@@ -99,6 +101,8 @@ class GuidedPredictorCorrector(PredictorCorrector):
         self.step = 0
         self.prev_pos_target = None
         self.prev_cell_target = None
+        self.ts = ts
+        self.te = te
 
     def _score_fn(
         self,
@@ -222,7 +226,16 @@ class GuidedPredictorCorrector(PredictorCorrector):
                 model_target=self.diffusion_module.model_targets,
                 batch_idx=self.diffusion_module.corruption._get_batch_indices(x),
             )
-            if (self.step + 1) in [1, 100, 200, 300, 400, 500, 750, 1000]:
+            if (self.step + 1) in [
+                1,
+                100,
+                200,
+                300,
+                400,
+                500,
+                750,
+                1000,
+            ] and self.mode == "predict":
                 print(f"Step {self.step}")
                 print("~~~~~~~~~~~~~~~~~~~~~~")
                 # print(f"pos score: {pos_score2}")
@@ -293,7 +306,7 @@ class GuidedPredictorCorrector(PredictorCorrector):
                 # clean_pos_diff2 = (x.pos - pos_target2 - torch.round(x.pos - pos_target2)).pow(2)
                 pos_mask = torch.isclose(pos_target, pos_target2).float()
                 # clean_pos_diff = clean_pos_diff + clean_pos_diff2
-                clean_pos_diff = clean_pos_diff * (1 + pos_mask * 6)
+                clean_pos_diff = clean_pos_diff * (1 + pos_mask * 15)
 
                 pos_score = torch.autograd.grad(
                     clean_pos_diff.sum(),
@@ -326,7 +339,16 @@ class GuidedPredictorCorrector(PredictorCorrector):
                 # scores["cell"] = torch.zeros_like(lattice_score2)
                 x.cell.detach()
 
-                if (self.step + 1) in [1, 100, 200, 300, 400, 500, 750, 1000]:
+                if (self.step + 1) in [
+                    1,
+                    100,
+                    200,
+                    300,
+                    400,
+                    500,
+                    750,
+                    1000,
+                ] and self.mode == "predict":
                     print(f"\nStep {self.step+1}")
                     print("~~~~~~~~~~~~~~~~~~~~~~")
                     print(f"pos score: {pos_score2}")
@@ -340,15 +362,14 @@ class GuidedPredictorCorrector(PredictorCorrector):
                     print("~~~~~~~~~~~~~~~~~~~~~~")
                     print(f"cell_target: {cell_target}")
                     print(f"cell: {x.cell}")
-                    print(f"Step {self.step+1}")
-
+                    print(f"Step {self.step+1} guidance_scale: {_guidance_scale}")
             # scores["atomic_numbers"] = pred_data.atomic_numbers[anchors]
             return no_cond, pred_data.replace(**scores)
 
         _guidance_scale = 0
         # ts = 0.95
-        ts = 1
-        te = 0.0
+        ts = self.ts
+        te = self.te
         if t[0] <= ts and t[0] >= te:
             if self._guidance_start is not None:
                 _guidance_scale = self._guidance_start + (
@@ -356,10 +377,6 @@ class GuidedPredictorCorrector(PredictorCorrector):
                 ) * (ts - t[0])
             else:
                 _guidance_scale = self._guidance_scale
-
-        # if abs(_guidance_scale - 1) < 1e-15:
-        #     # unconditional_score, model_out = get_unconditional_score()
-        #     return get_conditional_score()[1]
 
         if abs(_guidance_scale) < 1e-15:
             return get_unconditional_score()[0]
@@ -408,6 +425,7 @@ class GuidedPredictorCorrector(PredictorCorrector):
             # Corrector updates.
             if self._correctors:
                 for _ in range(self._n_steps_corrector):
+                    self.mode = "correct"
                     score = self._score_fn(batch, t)
                     fns = {
                         k: corrector.step_given_score for k, corrector in self._correctors.items()
@@ -459,6 +477,7 @@ class GuidedPredictorCorrector(PredictorCorrector):
                     proj_mean_batch = proj_mean_batch.replace(atomic_numbers=sym_atom)
 
             # Predictor updates
+            self.mode = "predict"
             score = self._score_fn(batch, t)
             predictor_fns = {
                 k: predictor.update_given_score for k, predictor in self._predictors.items()
@@ -638,4 +657,4 @@ class GuidedPredictorCorrector(PredictorCorrector):
                     break
         pos_prim_frac_proj = pos_prim_frac_proj_all[self.frac_batch]
 
-        return pos_prim_frac_proj % 1.0, prim_lat_proj
+        return (pos_prim_frac_proj % 1.0), prim_lat_proj

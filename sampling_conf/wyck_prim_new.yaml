@@ -7,6 +7,8 @@ sampler_partial:
   guidance_scale: 0
   guidance_start: 0.0001
   guidance_end: 0.001
+  ts: 1.0
+  te: 0.0
   use_cond_model: False
   remove_conditioning_fn:
     _target_: mattergen.property_embeddings.SetUnconditionalEmbeddingType

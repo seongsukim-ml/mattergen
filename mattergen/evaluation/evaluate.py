@@ -9,14 +9,13 @@ from mattergen.evaluation.reference.reference_dataset import ReferenceDataset
 from mattergen.evaluation.utils.relaxation import relax_structures
 from mattergen.evaluation.utils.structure_matcher import (
     DefaultDisorderedStructureMatcher,
-    DefaultOrderedStructureMatcher,
-    OrderedStructureMatcher,
     DisorderedStructureMatcher,
+    OrderedStructureMatcher,
 )
 
 
-def main(
-    structures_path: str,
+def evaluate(
+    structures: list[Structure],
     relax: bool = True,
     energies: list[float] | None = None,
     reference: ReferenceDataset | None = None,
