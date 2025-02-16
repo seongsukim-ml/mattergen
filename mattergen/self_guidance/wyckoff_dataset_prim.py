@@ -155,7 +155,9 @@ class WyckoffDataset(BaseDataset):
             total_count = sum(space_group_counts.values())
             space_group_probs = [count / total_count for count in space_group_counts.values()]
             space_groups = np.random.choice(
-                list(space_group_counts.keys()), num_samples, p=space_group_probs
+                [int(elem) for elem in list(space_group_counts.keys())],
+                num_samples,
+                p=space_group_probs,
             )
         else:
             if isinstance(space_groups, int):
@@ -163,7 +165,7 @@ class WyckoffDataset(BaseDataset):
             elif len(space_groups) == 1:
                 space_groups = [space_groups[0] for _ in range(num_samples)]
             else:
-                assert len(space_group_counts) == len(
+                assert num_samples == len(
                     space_groups
                 ), "space_groups must have the same length as space_group_counts"
 

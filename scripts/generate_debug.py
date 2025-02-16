@@ -139,6 +139,7 @@ def cif_eval(file_path, spg=None):
     cif_path = file_path / dir_name
     zipfile.ZipFile(file_path / "generated_crystals_cif.zip", "r").extractall(file_path)
     os.rename(file_path / "tmp", cif_path)
+    os.makedirs(file_path / "generated_crystals_cif_spg", exist_ok=True)
     print(cif_path)
 
     # get list of cifs from directory
@@ -147,17 +148,29 @@ def cif_eval(file_path, spg=None):
     cif_list = [os.path.join(cif_path, f) for f in cif_list]
 
     structures = []
-    for cif_file in cif_list:
-        parser = CifParser(cif_file)
-        structure = parser.get_structures(primitive=False)[0]
-        structures.append(structure)
+    try:
+        for cif_file in cif_list:
+            parser = CifParser(cif_file)
+            structure = parser.get_structures(primitive=False)[0]
+            structures.append(structure)
+    except Exception as e:
+        print(e)
+        print("Failed to parse CIF files")
+        return
 
     def save_res(tol=0.1):
         print(f"[I] save the symprec={tol}")
         res = {}
         for i, structure in enumerate(structures):
-            sgn = SpacegroupAnalyzer(structure, symprec=tol).get_space_group_number()
+            try:
+                sgn = SpacegroupAnalyzer(structure, symprec=tol).get_space_group_number()
+            except:
+                sgn = 0
             # print(i,sgn)
+            if sgn == spg:
+                structure.to(
+                    filename=cif_path.with_name("generated_crystals_cif_spg") / f"spg{spg}_{i}.cif"
+                )
             if sgn not in res:
                 res[sgn] = 0
             res[sgn] += 1
@@ -172,7 +185,9 @@ def cif_eval(file_path, spg=None):
             res[spg] = 0
 
         # write the number of spg
-        with open(file_path / f"symprec_{tol}_spg{spg}_{res[spg]}_{len(structures)}.txt", "w") as f:
+        with open(
+            file_path / f"symprec_{tol:.2f}_spg{spg}_{res[spg]}_{len(structures)}.txt", "w"
+        ) as f:
             for k in sorted(res.keys()):
                 f.write(f"{k:3} {res[k]}  {res[k]/len(structures):.2f}\n")
             f.write("\n")
@@ -188,6 +203,11 @@ def cif_eval(file_path, spg=None):
     except Exception as e:
         print(e)
         print("Failed to save with symprec=0.01")
+    try:
+        save_res(0.05)
+    except Exception as e:
+        print(e)
+        print("Failed to save with symprec=0.05")
     try:
         save_res(0.1)
     except Exception as e:

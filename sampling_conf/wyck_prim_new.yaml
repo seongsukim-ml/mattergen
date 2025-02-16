@@ -43,6 +43,6 @@ sampler_partial:
 condition_loader_partial:
   _partial_: true
   _target_: mattergen.self_guidance.wyckoff_dataset_prim.get_wyckoff_condition_loader
-  space_group_infos_path: /home/holywater2/crystal_gen/mattergen/_my_scripts/space_group_info/prim/mp_20_val
+  space_group_infos_path: /home/holywater2/crystal_gen/mattergen/_my_scripts/space_group_info/prim/alex_mp_20_train
   space_groups: 225
   shuffle: False

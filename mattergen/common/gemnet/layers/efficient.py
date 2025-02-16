@@ -154,15 +154,10 @@ class EfficientInteractionBilinear(torch.nn.Module):
             return torch.zeros((0, 0))
 
         # Create (zero-padded) dense matrix of the neighboring edge embeddings.
-        try:
-            Kmax = torch.max(
-                torch.max(id_ragged_idx) + 1,
-                torch.tensor(0).to(id_ragged_idx.device),
-            )
-        except:
-            import pdb
-
-            pdb.set_trace()
+        Kmax = torch.max(
+            torch.max(id_ragged_idx) + 1,
+            torch.tensor(0).to(id_ragged_idx.device),
+        )
         # maximum number of neighbors, catch empty id_reduce_ji with maximum
         m2 = m.new_zeros(nEdges, Kmax, self.emb_size)
         m2[id_reduce, id_ragged_idx] = m

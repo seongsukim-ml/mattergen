@@ -15,6 +15,11 @@ from mattergen.evaluation.utils.structure_matcher import (
     DefaultDisorderedStructureMatcher,
     DefaultOrderedStructureMatcher,
 )
+import torch
+
+# import scipy
+
+torch.set_num_threads(8)
 
 
 def main(

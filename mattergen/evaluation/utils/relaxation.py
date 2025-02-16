@@ -32,7 +32,7 @@ def relax_structures(
     structures: Structure | list[Structure],
     device: str = str(get_device()),
     load_path: str = None,
-    **kwargs
+    **kwargs,
 ) -> tuple[list[Structure], np.ndarray]:
     if isinstance(structures, Structure):
         structures = [structures]

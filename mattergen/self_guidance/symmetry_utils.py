@@ -13,6 +13,7 @@ from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pyxtal import pyxtal
+from torch_scatter import scatter_max, scatter_min
 
 EPSILON = 1e-5
 
@@ -22,7 +23,7 @@ def get_latttice_permutations(device="cpu"):
     lat_perm[:, :, :, :, 0, 0] = 1
     lat_perm[:, :, :, :, 1, 1] = 1
     lat_perm[:, :, :, :, 2, 2] = 1
-    # 1, 0, 2 implies lat(1) > lat(0) > lat(2)
+    # Ex) 1, 0, 2 implies lat(1) > lat(0) > lat(2)
     possible_perms = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
 
     perm_for_A1 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
@@ -30,13 +31,6 @@ def get_latttice_permutations(device="cpu"):
 
     # orthorhombic with A:
     for i in [38, 39, 40, 41]:
-        lat_perm[i, 0, 1, 2] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
-        lat_perm[i, 0, 2, 1] = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
-        lat_perm[i, 1, 0, 2] = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
-        lat_perm[i, 1, 2, 0] = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])
-        lat_perm[i, 2, 0, 1] = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
-        lat_perm[i, 2, 1, 0] = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-
         for p in possible_perms:
             lat_perm[i, p[0], p[1], p[2]] = perm_for_A1 @ lat_perm[0, p[0], p[1], p[2]]
         perm_for_A2[i] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
@@ -44,6 +38,83 @@ def get_latttice_permutations(device="cpu"):
     perm_for_A1 = torch.tensor(perm_for_A1, dtype=torch.float32)
     perm_for_A2 = torch.tensor(perm_for_A2, dtype=torch.float32)
     return lat_perm.to(device), perm_for_A1.to(device), perm_for_A2.to(device)
+
+
+def get_latttice_permutations2(device="cpu"):
+    lat_perm = np.zeros((231, 3, 3, 3, 3, 3))
+    lat_perm[:, :, :, :, 0, 0] = 1
+    lat_perm[:, :, :, :, 1, 1] = 1
+    lat_perm[:, :, :, :, 2, 2] = 1
+    # Ex) 1, 0, 2 implies lat(1) > lat(0) > lat(2)
+    possible_perms = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+
+    perm_for_A1 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+    perm_for_A2 = lat_perm.copy()
+    # lat_perm[:, 0, 1, 2] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+    # lat_perm[:, 0, 2, 1] = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+    # lat_perm[:, 1, 0, 2] = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+    # lat_perm[:, 1, 2, 0] = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])
+    # lat_perm[:, 2, 0, 1] = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+    # lat_perm[:, 2, 1, 0] = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+
+    # orthorhombic with A:
+    for i in [38, 39, 40, 41]:
+        perm_for_A2[i, 0, 1, 2] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+        perm_for_A2[i, 0, 2, 1] = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+        perm_for_A2[i, 1, 0, 2] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+        perm_for_A2[i, 1, 2, 0] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+        perm_for_A2[i, 2, 0, 1] = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+        perm_for_A2[i, 2, 1, 0] = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+
+        # perm_for_A2[i, 0, 1, 2] = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+        # perm_for_A2[i, 0, 2, 1] = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        # perm_for_A2[i, 1, 0, 2] = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+        # perm_for_A2[i, 1, 2, 0] = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+        # perm_for_A2[i, 2, 0, 1] = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+        # perm_for_A2[i, 2, 1, 0] = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+
+        lat_perm[i, 0, 1, 2] = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+        lat_perm[i, 0, 2, 1] = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+        lat_perm[i, 1, 0, 2] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+        lat_perm[i, 1, 2, 0] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+        lat_perm[i, 2, 0, 1] = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+        lat_perm[i, 2, 1, 0] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+        # for p in possible_perms:
+        #     lat_perm[i, p[0], p[1], p[2]] = perm_for_A1 @ lat_perm[0, p[0], p[1], p[2]]
+        # perm_for_A2[i] = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])
+    lat_perm = torch.tensor(lat_perm, dtype=torch.float32)
+    perm_for_A1 = torch.tensor(perm_for_A1, dtype=torch.float32)
+    perm_for_A2 = torch.tensor(perm_for_A2, dtype=torch.float32)
+    return lat_perm.to(device), perm_for_A1.to(device), perm_for_A2.to(device)
+
+
+# def get_latttice_permutations(device="cpu"):
+#     lat_perm = np.zeros((231, 3, 3, 3, 3, 3))
+#     lat_perm[:, :, :, :, 0, 0] = 1
+#     lat_perm[:, :, :, :, 1, 1] = 1
+#     lat_perm[:, :, :, :, 2, 2] = 1
+#     # 1, 0, 2 implies lat(1) > lat(0) > lat(2)
+#     possible_perms = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+
+#     perm_for_A1 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+#     perm_for_A2 = np.eye(3).reshape(1, 3, 3).repeat(231, axis=0)
+
+#     # orthorhombic with A:
+#     for i in [38, 39, 40, 41]:
+#         lat_perm[i, 0, 1, 2] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+#         lat_perm[i, 0, 2, 1] = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+#         lat_perm[i, 1, 0, 2] = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+#         lat_perm[i, 1, 2, 0] = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])
+#         lat_perm[i, 2, 0, 1] = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]])
+#         lat_perm[i, 2, 1, 0] = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+
+#         for p in possible_perms:
+#             lat_perm[i, p[0], p[1], p[2]] = perm_for_A1 @ lat_perm[0, p[0], p[1], p[2]]
+#         perm_for_A2[i] = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+#     lat_perm = torch.tensor(lat_perm, dtype=torch.float32)
+#     perm_for_A1 = torch.tensor(perm_for_A1, dtype=torch.float32)
+#     perm_for_A2 = torch.tensor(perm_for_A2, dtype=torch.float32)
+#     return lat_perm.to(device), perm_for_A1.to(device), perm_for_A2.to(device)
 
 
 def abs_cap(val, max_abs_val=1):

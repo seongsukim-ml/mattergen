@@ -67,7 +67,7 @@ class GuidedPredictorCorrector(PredictorCorrector):
         self,
         *,
         guidance_scale: float,
-        remove_conditioning_fn: BatchTransform,
+        remove_conditioning_fn: BatchTransform | None = None,
         keep_conditioning_fn: BatchTransform | None = None,
         guidance_start: float | None = None,
         guidance_end: float | None = None,
@@ -306,7 +306,12 @@ class GuidedPredictorCorrector(PredictorCorrector):
                 # clean_pos_diff2 = (x.pos - pos_target2 - torch.round(x.pos - pos_target2)).pow(2)
                 pos_mask = torch.isclose(pos_target, pos_target2).float()
                 # clean_pos_diff = clean_pos_diff + clean_pos_diff2
-                clean_pos_diff = clean_pos_diff * (1 + pos_mask * 15)
+                # clean_pos_diff = clean_pos_diff * (1 + pos_mask * 100 * (1 - t[0]))
+                clean_pos_diff = clean_pos_diff * (
+                    1 + pos_mask / (torch.clamp_max((x.pos - pos_target).abs(), 1) + 0.01)
+                )
+                # if pos_mask.sum() == 0:
+                #     clean_pos_diff = clean_pos_diff * 10
 
                 pos_score = torch.autograd.grad(
                     clean_pos_diff.sum(),
@@ -314,7 +319,9 @@ class GuidedPredictorCorrector(PredictorCorrector):
                     allow_unused=True,
                     create_graph=True,
                 )[0].detach()
-                pos_score2 = -pos_score / p_std * 15
+                pos_coeff = 15 / p_std
+                # pos_coeff = 1
+                pos_score2 = -pos_score * pos_coeff
                 scores["pos"] = pos_score2
                 # scores["pos"] = torch.zeros_like(pos_score2)
                 x.pos.detach()
@@ -327,14 +334,22 @@ class GuidedPredictorCorrector(PredictorCorrector):
                 # clean_lattice_diff2 = (cell_target2 - x.cell).pow(2)
                 cell_mask = torch.isclose(cell_target, cell_target2).float()
                 # clean_lattice_diff = clean_lattice_diff + clean_lattice_diff2
-                clean_lattice_diff = clean_lattice_diff * (1 + cell_mask * 6)
+                # clean_lattice_diff = clean_lattice_diff * (1 + cell_mask * 100 * (1 - t[0]))
+                # clean_lattice_diff = clean_lattice_diff * (1 + cell_mask * 10)
+                clean_lattice_diff = clean_lattice_diff * (
+                    1 + cell_mask / (torch.clamp_max((x.cell - cell_target).abs(), 1) + 0.01)
+                )
+                # if cell_mask.sum() == 0:
+                #     clean_lattice_diff = clean_lattice_diff * 10
 
                 lattice_score = torch.autograd.grad(
                     clean_lattice_diff.sum(),
                     x.cell,
                     allow_unused=True,
                 )[0].detach()
-                lattice_score2 = -lattice_score / c_std * 3
+                lattice_coeff = 3 / c_std
+                # lattice_coeff = 1
+                lattice_score2 = -lattice_score * lattice_coeff
                 scores["cell"] = lattice_score2
                 # scores["cell"] = torch.zeros_like(lattice_score2)
                 x.cell.detach()
@@ -363,6 +378,7 @@ class GuidedPredictorCorrector(PredictorCorrector):
                     print(f"cell_target: {cell_target}")
                     print(f"cell: {x.cell}")
                     print(f"Step {self.step+1} guidance_scale: {_guidance_scale}")
+                    print(f"c_std: {c_std[0][0][0]}, p_std: {p_std[0][0]}")
             # scores["atomic_numbers"] = pred_data.atomic_numbers[anchors]
             return no_cond, pred_data.replace(**scores)
 
@@ -466,15 +482,15 @@ class GuidedPredictorCorrector(PredictorCorrector):
                         mean_batch=proj_mean_batch,
                         mask=mask,
                     )
-                    sym_atom_freq = scatter(
-                        torch.functional.F.one_hot(proj_batch.atomic_numbers),
-                        self.anchors,
-                        dim=0,
-                        reduce="sum",
-                    )
-                    sym_atom = torch.argmax(sym_atom_freq, dim=-1)[self.anchors]
-                    proj_batch = proj_batch.replace(atomic_numbers=sym_atom)
-                    proj_mean_batch = proj_mean_batch.replace(atomic_numbers=sym_atom)
+                    # sym_atom_freq = scatter(
+                    #     torch.functional.F.one_hot(proj_batch.atomic_numbers),
+                    #     self.anchors,
+                    #     dim=0,
+                    #     reduce="sum",
+                    # )
+                    # sym_atom = torch.argmax(sym_atom_freq, dim=-1)[self.anchors]
+                    # proj_batch = proj_batch.replace(atomic_numbers=sym_atom)
+                    # proj_mean_batch = proj_mean_batch.replace(atomic_numbers=sym_atom)
 
             # Predictor updates
             self.mode = "predict"
@@ -516,15 +532,18 @@ class GuidedPredictorCorrector(PredictorCorrector):
                 mean_batch=proj_mean_batch,
                 mask=mask,
             )
-            sym_atom_freq = scatter(
-                torch.functional.F.one_hot(proj_batch.atomic_numbers),
-                self.anchors,
-                dim=0,
-                reduce="sum",
-            )
-            sym_atom = torch.argmax(sym_atom_freq, dim=-1)[self.anchors]
-            proj_batch = proj_batch.replace(atomic_numbers=sym_atom)
-            proj_mean_batch = proj_mean_batch.replace(atomic_numbers=sym_atom)
+
+            # proj_batch = proj_batch.replace(atomic_numbers=sym_atom)
+            # proj_mean_batch = proj_mean_batch.replace(atomic_numbers=sym_atom)
+        sym_atom_freq = scatter(
+            torch.functional.F.one_hot(proj_batch.atomic_numbers),
+            self.anchors,
+            dim=0,
+            reduce="sum",
+        )
+        sym_atom = torch.argmax(sym_atom_freq, dim=-1)[self.anchors]
+        proj_batch = proj_batch.replace(atomic_numbers=sym_atom)
+        proj_mean_batch = proj_mean_batch.replace(atomic_numbers=sym_atom)
 
         final_proj_batch = proj_batch.clone()
         fin_proj_pos, fin_proj_cell = self._project_to_space_group(final_proj_batch)

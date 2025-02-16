@@ -1,0 +1,48 @@
+sampler_partial:
+  _target_: mattergen.self_guidance.wyckoff_sampler_prim_mask.GuidedPredictorCorrector.from_pl_module
+  N: 1000
+  eps_t: ${eval:'1/${.N}'}
+
+  _partial_: true
+  guidance_scale: 0
+  guidance_start: 0.0001
+  guidance_end: 0.001
+  ts: 1.0
+  te: 0.0
+  use_cond_model: False
+  remove_conditioning_fn:
+    _target_: mattergen.property_embeddings.SetUnconditionalEmbeddingType
+  keep_conditioning_fn:
+    _target_: mattergen.property_embeddings.SetConditionalEmbeddingType
+  predictor_partials:
+    pos:
+      _target_: mattergen.diffusion.wrapped.wrapped_predictors_correctors.WrappedAncestralSamplingPredictor
+      _partial_: true
+    cell:
+      _target_: mattergen.common.diffusion.predictors_correctors.LatticeAncestralSamplingPredictor
+      _partial_: true
+    atomic_numbers:
+      _target_: mattergen.diffusion.d3pm.d3pm_predictors_correctors.D3PMAncestralSamplingPredictor
+      predict_x0: True
+      _partial_: true
+
+  corrector_partials:
+    pos:
+      _target_: mattergen.diffusion.wrapped.wrapped_predictors_correctors.WrappedLangevinCorrector
+      _partial_: true
+      max_step_size: 1e6
+      snr: 0.4
+    cell:
+      _target_: mattergen.common.diffusion.predictors_correctors.LatticeLangevinDiffCorrector
+      _partial_: true
+      max_step_size: 1e6
+      snr: 0.2
+
+  n_steps_corrector: 1
+
+condition_loader_partial:
+  _partial_: true
+  _target_: mattergen.self_guidance.wyckoff_dataset_prim.get_wyckoff_condition_loader
+  space_group_infos_path: /home/holywater2/crystal_gen/mattergen/_my_scripts/space_group_info/prim/mp_20_val
+  space_groups: 225
+  shuffle: False
