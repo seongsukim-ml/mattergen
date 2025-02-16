@@ -51,17 +51,6 @@ If this prints some version like `git-lfs/3.0.2 (GitHub; linux amd64; go 1.18.1)
 > Running MatterGen on Apple Silicon is **experimental**. Use at your own risk.  
 > Further, you need to run `export PYTORCH_ENABLE_MPS_FALLBACK=1` before any training or generation run.
 
-To install the environment for Apple Silicon, run these commands:
-```bash
-cp pyproject.toml pyproject.linux.toml
-mv pyproject_apple_silicon.toml pyproject.toml
-pip install uv
-uv venv .venv --python 3.10 
-source .venv/bin/activate
-uv pip install -e .
-export PYTORCH_ENABLE_MPS_FALLBACK=1  # required to run MatterGen on Apple Silicon
-```
-
 
 
 ### Install Git LFS
@@ -243,7 +232,7 @@ mattergen-finetune adapter.pretrained_name=$MODEL_NAME data_module=mp_20 +lightn
 
 #### Fine-tune on your own property data
 You may also fine-tune MatterGen on your own property data. Essentially what you need is a property value (typically `float`) for a subset of the data you want to train on (e.g., `alex_mp_20`). Proceed as follows:
-1. Add the name of your property to the `PROPERTY_SOURCE_IDS` list inside [`mattergen/mattergen/common/utils/globals.py`](mattergen/mattergen/common/utils/globals.py).
+1. Add the name of your property to the `PROPERTY_SOURCE_IDS` list inside [`mattergen/common/utils/globals.py`](mattergen/common/utils/globals.py).
 2. Add a new column with this name to the dataset(s) you want to train on, e.g., `datasets/alex_mp_20/train.csv` and `datasets/alex_mp_20/val.csv` (requires you to have followed the [pre-processing steps](#pre-process-a-dataset-for-training)).
 3. Re-run the CSV to dataset script `csv-to-dataset --csv-folder datasets/<MY_DATASET>/ --dataset-name <MY_DATASET> --cache-folder datasets/cache`, substituting your dataset name for `MY_DATASET`.
 4. Add a `<your_property>.yaml` config file to [`mattergen/conf/lightning_module/diffusion_module/model/property_embeddings`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings). If you are adding a float-valued property, you may copy an existing configuration, e.g., [`dft_mag_density.yaml`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings/dft_mag_density.yaml). More complicated properties will require you to create your own custom `PropertyEmbedding` subclass, e.g., see the [`space_group`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings/space_group.yaml) or [`chemical_system`](mattergen/conf/lightning_module/diffusion_module/model/property_embeddings/chemical_system.yaml) configs.
